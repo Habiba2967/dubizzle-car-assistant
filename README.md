@@ -54,14 +54,20 @@ lines, with no separate frontend build step — appropriate for a time-boxed
 prototype. The client only calls the FastAPI backend over HTTP; it holds no
 business logic itself, keeping the API/client boundary clean.
 
-**Retrieval: tool calling + pandas, not RAG.** The dataset is small (100 rows)
-and mostly structured (make, model, year, price). Giving the LLM a
-`search_inventory` tool that filters a pandas DataFrame is exact for numeric/
-categorical filters ("under 150k", "year >= 2020") in a way embeddings aren't,
-and — critically — it forces every car fact in a reply to come from a real
-row returned by the tool, rather than the model's memory. A lightweight
-keyword match over the free-text `description` field adds a hybrid touch for
-things like "with a sunroof" without needing a vector database for 100 rows.
+**Retrieval: tool calling + pandas for structured fields, LLM reading for
+everything else.** Make, model, year, and trim are structured columns, so
+`search_inventory` filters them exactly via pandas — precise for things like
+"year >= 2020" in a way embeddings aren't. Price and other attributes
+(features, condition, warranty mentions) are NOT structured: the dataset has
+no price column at all, and only some listings happen to mention a price in
+their free-text `title`/`description`. Rather than fake a naive keyword match
+(which would miss "panoramic roof" when searching for "sunroof") or fabricate
+missing data, `search_inventory` returns the full title and description text
+alongside the structured fields, and the LLM is instructed to actually read
+that text and answer from it — including reading out a price when one is
+genuinely stated, and honestly saying "not listed" when it isn't. This keeps
+the same grounding guarantee (never state a fact that isn't actually in the
+data) while extending it to unstructured text, not just columns.
 
 **Memory: SQLite for long-term, in-process dict for short-term.** Long-term
 profile data (name, budget, preferences, liked listings) is a handful of
@@ -73,21 +79,23 @@ it doesn't need to survive a restart, so no persistence is needed there.
 **Agent loop: hand-written, via LiteLLM, no agent framework.** The control
 flow (call model → run any requested tool → feed result back → repeat) is
 ~30 lines and easy to explain end-to-end, which matters more here than a
-framework's abstractions. LiteLLM is used only so the model provider is a
-one-line env var — currently pointed at Google's free-tier `gemini-2.0-flash`.
+framework's abstractions. LiteLLM is used only so the model provider is a one-line env var
+(`LLM_MODEL` in `.env`) — currently pointed at Google's free-tier
+`gemini-3.5-flash-lite`..
 
 ## A note on the dataset: no Price column
 
 The provided workbook (both the "raw dataset" and "cleaned dataset" sheets)
-does not actually include a price field, even though the brief asks the agent
-to filter/qualify by price range. Rather than let the LLM invent a number at
-chat time — which would violate the "don't hallucinate inventory" requirement
-— `data/prepare_data.py` generates a **deterministic, seeded synthetic price**
-per listing once, at data-prep time (based on make/year, so a Ferrari and a
-Toyota land in sensible AED bands). The same listing always gets the same
-price, and the LLM only ever reads it from the CSV like any other column.
-This is a documented workaround, not a hidden one — happy to discuss
-alternatives (e.g. scraping real listings for price) in the interview.
+has no structured price field, even though the brief asks the agent to
+gather the user's price range. Rather than fabricate a price for every
+listing — which would mean the assistant could end up stating a number
+that was never actually part of the inventory — I decided not to invent one.
+Some listings do mention a price directly in their title or description text,
+so the assistant reads that text itself before answering a price question,
+and says a price isn't listed only after actually checking, rather than
+assuming absence. Budget is still captured from the user for lead
+qualification (`save_lead`) independently of whether any given listing's own
+price happens to be known.
 
 ## Out of scope for this prototype
 
@@ -117,7 +125,7 @@ app/
 client/
   streamlit_app.py   chat UI, talks to the backend over HTTP only
 data/
-  prepare_data.py    one-off script: raw xlsx -> cars.csv (adds synthetic price)
+  prepare_data.py    one-off script: raw xlsx -> cars.csv (cleans + derives mileage)
   cars.csv           generated inventory the backend loads at startup
   leads.csv          created at runtime by save_lead
   bookings.csv       created at runtime by book_viewing
