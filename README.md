@@ -32,6 +32,7 @@ opens a browser tab automatically.
 
 ## Demo 
 ### Multi-turn conversation
+The chatbot remembers the user's budget and states that the available options are out of budget
 ![multi-turn demo](docs/short-term-memory.png) 
 ### Returning user recall 
 ![returning user demo](docs/long-term-memory.png)
